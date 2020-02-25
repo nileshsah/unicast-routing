@@ -15,13 +15,16 @@
 #define INF 2147483647
 #define BROADCAST_INTERVAL_IN_SEC 2
 
-void hackyBroadcast(const char* buf, int length);
+void hackyBroadcast(const char* buf, int length, int onlyNeighbors);
 
 void* announceToNeighbors(void* unusedParam);
+void* nodeLivelinessCron(void* unusedParam);
 
 void listenForNeighbors();
 
 void buildRoutingTable();
 
 int isAlive(int);
+
+void broadcastLinkStatePacket(short srcId, short destId, int cost);
 

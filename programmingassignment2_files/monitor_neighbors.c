@@ -18,16 +18,20 @@ extern short globalMyID;
 //in order to realize when a neighbor has gotten cut off from you.
 extern struct timeval globalLastHeartbeat[MAX_NODE];
 
+extern char *logFileName;
+
 //our all-purpose UDP socket, to be bound to 10.1.1.globalMyID, port 7777
 extern int globalSocketUDP;
 //pre-filled for sending to 10.1.1.0 - 255, port 7777
 extern struct sockaddr_in globalNodeAddrs[MAX_NODE];
 
 // LSP data
+extern long costTable[MAX_NODE][MAX_NODE];
+
 int lamportClock;
-long costTable[MAX_NODE][MAX_NODE];
 int clockTable[MAX_NODE][MAX_NODE];
 int nextHop[MAX_NODE];
+int isNeighbor[MAX_NODE];
 
 void init() {
 	int i, j;
@@ -35,9 +39,64 @@ void init() {
 	for (i = 0; i < MAX_NODE; i++) {
 		for (j = 0; j < MAX_NODE; j++) {
 			costTable[i][j] =  -1;
+			clockTable[i][j] = 0;
 		}
 	}
+	for (i = 0; i < MAX_NODE; i++) {
+		isNeighbor[i] = 0;
+		nextHop[i] = -1;
+	}
 }
+
+// Logging helper functions
+
+void writeToFile(char *buffer) {
+    FILE *fp = fopen(logFileName, "a");
+    fwrite(buffer, sizeof(char), sizeof(buffer), fp);
+	fwrite("\n", sizeof(char), 1, fp);
+    fclose(fp);
+}
+
+void logSendRequest(int destId, int nodeId, char *message) {
+    char buffer[1000];
+    memset(buffer, '\0', sizeof buffer);
+    
+    int charCount = sprintf(buffer, "sending packet dest %d nexthop %d message ", destId, nodeId);
+    strncpy(buffer + charCount, message, strlen(message));
+    
+    writeToFile(buffer);
+}
+
+void logForwardingRequest(int destId, int nodeId, char *message) {
+    char buffer[1000];
+    memset(buffer, '\0', sizeof buffer);
+    
+    int charCount = sprintf(buffer, "forward packet dest %d nexthop %d message ", destId, nodeId);
+    strncpy(buffer + charCount, message, strlen(message));
+    
+    writeToFile(buffer);
+}
+
+void logReceiveRequest(char *message) {
+	char buffer[1000];
+    memset(buffer, '\0', sizeof buffer);
+    
+    int charCount = sprintf(buffer, "receive packet message ");
+    strncpy(buffer + charCount, message, strlen(message));
+    
+    writeToFile(buffer);
+}
+
+void logUnreachableSendRequest(int destId) {
+	char buffer[1000];
+    memset(buffer, '\0', sizeof buffer);
+    
+    sprintf(buffer, "unreachable dest %d", destId);
+    
+    writeToFile(buffer);
+}
+
+// --------------
 
 void updateClock(int clockVal) {
 	if (lamportClock < clockVal) {
@@ -45,13 +104,19 @@ void updateClock(int clockVal) {
 	}
 }
 
-void updateEdgeCost(int srcId, int destId, int cost) {
+void updateEdgeCost(int srcId, int destId, int cost, int clockVal) {
 	long lastCost;
 	lastCost = costTable[srcId][destId];
+	
 	costTable[srcId][destId] = cost;
-	clockTable[srcId][destId] = lamportClock;
-	if (lastCost != cost && isAlive(srcId) && isAlive(destId)) {
+	costTable[destId][srcId] = cost;
+
+	clockTable[srcId][destId] = clockVal;
+	clockTable[destId][srcId] = clockVal;
+
+	if (lastCost != cost) {
 		buildRoutingTable();
+		broadcastLinkStatePacket(srcId, destId, cost);
 	}
 }
 
@@ -91,7 +156,7 @@ void buildRoutingTable() {
 
 	for (k = 0; k < MAX_NODE; k++) {
 		for (i = 0; i < MAX_NODE; i++) for (j = 0; j < MAX_NODE; j++) {
-			if (i == j || !isAlive(i) || !isAlive(j) || costTable[i][j] == -1) continue;
+			if (i == j || costTable[i][j] < 0) continue;
 			long newCost = distance[i] + costTable[i][j];
 			if ((newCost < distance[j]) || (newCost == distance[j] && parent[j] > i)) {
 				distance[j] = newCost;
@@ -103,8 +168,8 @@ void buildRoutingTable() {
 }
 
 // lspp<2 bytes srcNode><2 bytes destNode><4 bytes cost><4 bytes nonce>
-void sendLinkStatePacket(short destId, int cost) {
-	short noSrcId = htons(globalMyID), noDestId = htons(destId);
+void broadcastLinkStatePacket(short srcId, short destId, int cost) {
+	short noSrcId = htons(srcId), noDestId = htons(destId);
 	int noCost = htonl(cost), clockVal = htonl(lamportClock);
 	int packetLength = 4 + sizeof(short) + sizeof(short) + sizeof(int) + sizeof(int);
 
@@ -126,17 +191,28 @@ void sendLinkStatePacket(short destId, int cost) {
 	writePtr += sizeof(int);
 	memcpy(writePtr, &clockVal, sizeof(int));
 
-	hackyBroadcast(sendBuf, packetLength);
+	// Broadcast it to all neighbors!
+	hackyBroadcast(sendBuf, packetLength, 1);
+}
+
+void processLspPacket(short srcId, short destId, int cost, int nonce) {
+	int currentClock = clockTable[srcId][destId];
+	if (currentClock >= nonce) {
+		return;
+	}
+	updateClock(nonce);
+	updateEdgeCost(srcId, destId, cost, nonce);
 }
 
 
 // Yes, this is terrible. It's also terrible that, in Linux, a socket
 // can't receive broadcast packets unless it's bound to INADDR_ANY,
 // which we can't do in this assignment.
-void hackyBroadcast(const char* buf, int length) {
+void hackyBroadcast(const char* buf, int length, int onlyNeighbors) {
 	int i;
 	for (i = 0; i < 256; i++) {
 		if (i == globalMyID) continue; // (although with a real broadcast you would also get the packet yourself)
+		if (onlyNeighbors && !isNeighbor[i]) continue;
 		sendto(globalSocketUDP, buf, length, 0, (struct sockaddr*)&globalNodeAddrs[i], sizeof(globalNodeAddrs[i]));
 	}
 }
@@ -144,14 +220,43 @@ void hackyBroadcast(const char* buf, int length) {
 void* announceToNeighbors(void* unusedParam) {
 	struct timespec sleepFor;
 	sleepFor.tv_sec = 0;
-	sleepFor.tv_nsec = 500 * 1000 * 1000; // 300 ms
+	sleepFor.tv_nsec = 500 * 1000 * 1000; // 500 ms
 	while (1) {
 		updateClock(lamportClock + 1);
 		int clockVal = htonl(lamportClock);
 		char beatBuf[4+sizeof(int)];
 		strcpy(beatBuf, "beat");
 		memcpy(beatBuf+4, &clockVal, sizeof(int));
-		hackyBroadcast(beatBuf, 4+sizeof(int));
+		hackyBroadcast(beatBuf, 4+sizeof(int), 0);
+		nanosleep(&sleepFor, 0);
+	}
+}
+
+void* nodeLivelinessCron(void* unusedParam) {
+	struct timespec sleepFor;
+	sleepFor.tv_sec = 0;
+	sleepFor.tv_nsec = 500 * 1000 * 1000; // 500 ms
+	
+	int i;
+	int lastAlive[MAX_NODE];
+	memset(lastAlive, 0, sizeof lastAlive);
+
+	while (1) {
+		for (i = 0; i < MAX_NODE; i++) {
+			int current = isAlive(i);
+			if (current != lastAlive[i]) {
+				int currentCost = costTable[globalMyID][i];
+				updateClock(lamportClock + 1);
+				if (current == 0) {
+					isNeighbor[i] = 0;
+					updateEdgeCost(globalMyID, i, -abs(currentCost), lamportClock);
+				} else if (currentCost != -INF) {
+					isNeighbor[i] = 1;
+					updateEdgeCost(globalMyID, i, abs(currentCost), lamportClock);					
+				}
+			}
+			lastAlive[i] = current;
+		}
 		nanosleep(&sleepFor, 0);
 	}
 }
@@ -184,15 +289,32 @@ int parseHeartbeatMessage(char *buffer) {
 	return clockVal;
 }
 
-void listenForNeighbors()
-{
+void parseLspPacketMessage(char *buffer, short *srcId, short *destId, int *cost, int *nonce) {
+	buffer = buffer + 4;
+    memcpy(srcId, buffer, sizeof(short));
+    *srcId = ntohs(*srcId);
+
+	buffer += sizeof(short);
+	memcpy(destId, buffer, sizeof(short));
+    *destId = ntohs(*destId);
+
+	buffer += sizeof(short);
+	memcpy(cost, buffer, sizeof(int));
+    *cost = ntohl(*cost);
+
+	buffer += sizeof(int);
+	memcpy(nonce, buffer, sizeof(int));
+    *nonce = ntohl(*nonce);
+}
+
+void listenForNeighbors() {
 	char fromAddr[100];
 	struct sockaddr_in theirAddr;
 	socklen_t theirAddrLen;
-	char recvBuf[1000];
+	char recvBuf[1005];
 
-	ssize_t bytesRecvd;
-	while(1) {
+	int bytesRecvd;
+	while (1) {
 		theirAddrLen = sizeof(theirAddr);
 		// ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags, struct sockaddr *src_addr, socklen_t *addrlen);
 		bytesRecvd = recvfrom(globalSocketUDP, recvBuf, 1000 , 0, (struct sockaddr*)&theirAddr, &theirAddrLen);
@@ -210,39 +332,51 @@ void listenForNeighbors()
 			heardFrom = atoi(strchr(strchr(strchr(fromAddr,'.')+1,'.')+1,'.')+1);
 			
 			//TODO: this node can consider heardFrom to be directly connected to it; do any such logic now.
-	
+			isNeighbor[heardFrom] = 1;
+
 			//record that we heard from heardFrom just now.
-			int lastState = isAlive(heardFrom);
 			gettimeofday(&globalLastHeartbeat[heardFrom], 0);
-			if (lastState == 0) {
-				buildRoutingTable();
-			}
 		}
 		
 		//Is it a packet from the manager? (see mp2 specification for more details)
 		//send format: 'send'<4 ASCII bytes>, destID<net order 2 byte signed>, <some ASCII message>
-		if(!strncmp(recvBuf, "send", 4)) {
+		if (!strncmp(recvBuf, "send", 4)) {
 			// Sends the requested message to the requested destination node
-			int nodeId;
+			short nodeId, nextNodeId;
 			char message[100];
 			parseManagerSendCommand(recvBuf, &nodeId, message);
 			if (nodeId == globalMyID) {
-				// Log
+				logReceiveRequest(message);
 			} else {
-				sendto(globalSocketUDP, recvBuf, bytesRecvd, 0, 
-					(struct sockaddr*)&globalNodeAddrs[nodeId], sizeof(globalNodeAddrs[nodeId]));		
+				nextNodeId = nextHop[nodeId];
+				if (nextNodeId== -1) {
+					logUnreachableSendRequest(nodeId);
+				} else {
+					sendto(globalSocketUDP, recvBuf, bytesRecvd, 0, 
+						(struct sockaddr*)&globalNodeAddrs[nodeId], sizeof(globalNodeAddrs[nodeId]));
+					if (strstr(fromAddr, "10.1.1.")) {
+						logForwardingRequest(nodeId, nextNodeId, message);			
+					} else {
+						logSendRequest(nodeId, nextNodeId, message);			
+					}
+				}
 			}
-		} else if(!strncmp(recvBuf, "cost", 4)) {
+		} else if (!strncmp(recvBuf, "cost", 4)) {
 			// 'cost'<4 ASCII bytes>, destID<net order 2 byte signed> newCost<net order 4 byte signed>
 			// Records the cost change (remember, the link might currently be down! in that case,
 			// this is the new cost you should treat it as having once it comes back up.)
-			short int nodeId;
-			int costValue;
+			short int nodeId; int costValue;
 			parseManagerCostCommand(recvBuf, &nodeId, &costValue);
-			updateEdgeCost(globalMyID, nodeId, costValue);
-		} else if(!strncmp(recvBuf, "beat", 4)) {
+			updateClock(lamportClock + 1);
+			updateEdgeCost(globalMyID, nodeId, costValue, lamportClock);
+		} else if (!strncmp(recvBuf, "beat", 4)) {
 			int clockVal = parseHeartbeatMessage(recvBuf);
 			updateClock(clockVal + 1);
+		} else if (!strncmp(recvBuf, "lspp", 4)) {
+			short srcId, destId;
+			int cost, nonce;
+			parseLspPacketMessage(recvBuf, &srcId, &destId, &cost, &nonce);
+			processLspPacket(srcId, destId, cost, nonce);
 		}
 		
 		//TODO now check for the various types of packets you use in your own protocol
