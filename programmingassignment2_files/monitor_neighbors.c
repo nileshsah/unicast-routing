@@ -31,7 +31,7 @@ extern long costTable[MAX_NODE][MAX_NODE];
 
 void buildRoutingTable();
 int isAlive(int);
-void broadcastLinkStatePacket(short srcId, short destId, int cost);
+int buildLinkStatePacket(char *sendBuf, short srcId, short destId, int cost, int clockVal);
 void hackyBroadcast(const char* buf, int length, int onlyNeighbors);
 void writeToFile(char *buffer);
 
@@ -117,7 +117,9 @@ void updateEdgeCost(int srcId, int destId, int cost, int clockVal) {
 
 	if (lastCost != cost) {
 		buildRoutingTable();
-		broadcastLinkStatePacket(srcId, destId, cost);
+		char buffer[1000]; int length;
+		length = buildLinkStatePacket(buffer, srcId, destId, cost, -1);
+		hackyBroadcast(buffer, length, 1);
 	}
 }
 
@@ -126,7 +128,7 @@ int isAlive(int nodeId) {
 	gettimeofday(&currentTime, 0);
 	long elapsedHeartbeatTime = currentTime.tv_sec - globalLastHeartbeat[nodeId].tv_sec;
 	//fprintf(stderr, "%d checked %d = %ld sec\n", globalMyID, nodeId, elapsedHeartbeatTime);
-	return (elapsedHeartbeatTime < BROADCAST_INTERVAL_IN_SEC + 1);
+	return (elapsedHeartbeatTime < BROADCAST_INTERVAL_IN_SEC);
 }
 
 void calculateNextHop(int parent[]) {
@@ -153,6 +155,7 @@ void buildRoutingTable() {
 	for (i = 0; i < MAX_NODE; i++) {
 		distance[i] = INF;
 		parent[i] = -1;
+		nextHop[i] = -1;
 	}
 	distance[globalMyID] = 0;
 
@@ -170,6 +173,32 @@ void buildRoutingTable() {
 }
 
 // lspp<2 bytes srcNode><2 bytes destNode><4 bytes cost><4 bytes nonce>
+int buildLinkStatePacket(char *sendBuf, short srcId, short destId, int cost, int clockVal) {
+	short noSrcId = htons(srcId), noDestId = htons(destId);
+	int noCost = htonl(cost);
+	int packetLength = 4 + sizeof(short) + sizeof(short) + sizeof(int) + sizeof(int);
+
+	// Build LSP packet	
+	char *writePtr = sendBuf;
+	strcpy(writePtr, "lspp");
+	
+	writePtr += 4;
+	memcpy(writePtr, &noSrcId, sizeof(short int));
+	
+	writePtr += sizeof(short);
+	memcpy(writePtr, &noDestId, sizeof(short int));
+
+	writePtr += sizeof(short);
+	memcpy(writePtr, &noCost, sizeof(int));
+
+
+	writePtr += sizeof(int);
+	clockVal = (clockVal == -1 ? htonl(lamportClock) : htonl(clockVal));
+	memcpy(writePtr, &clockVal, sizeof(int));
+
+	return packetLength;
+}
+
 void broadcastLinkStatePacket(short srcId, short destId, int cost) {
 	short noSrcId = htons(srcId), noDestId = htons(destId);
 	int noCost = htonl(cost), clockVal = htonl(lamportClock);
@@ -234,6 +263,17 @@ void* announceToNeighbors(void* unusedParam) {
 	}
 }
 
+void shareTopologyWithNode(int nodeId) {
+	int i, j;
+	for (i = 0; i < MAX_NODE; i++) for (j = i + 1; j < MAX_NODE; j++) {
+		if (costTable[i][j] < 0) continue;
+		char lspBuf[1000]; int length;
+		length = buildLinkStatePacket(lspBuf, i, j, costTable[i][j], clockTable[i][j]);
+		sendto(globalSocketUDP, lspBuf, length, 0, 
+					(struct sockaddr*)&globalNodeAddrs[nodeId], sizeof(globalNodeAddrs[nodeId]));
+	}
+}
+
 void* nodeLivelinessCron(void* unusedParam) {
 	struct timespec sleepFor;
 	sleepFor.tv_sec = 0;
@@ -250,12 +290,14 @@ void* nodeLivelinessCron(void* unusedParam) {
 				int currentCost = costTable[globalMyID][i];
 				updateClock(lamportClock + 1);
 				if (current == 0) {
+					fprintf(stderr, "%d has found %d dead with cost %d\n", globalMyID, i, currentCost);
 					isNeighbor[i] = 0;
 					updateEdgeCost(globalMyID, i, -abs(currentCost), lamportClock);
 				} else {
 					fprintf(stderr, "%d has found %d alive with cost %d\n", globalMyID, i, currentCost);
 					isNeighbor[i] = 1;
-					updateEdgeCost(globalMyID, i, abs(currentCost), lamportClock);					
+					updateEdgeCost(globalMyID, i, abs(currentCost), lamportClock);
+					shareTopologyWithNode(i);					
 				}
 			}
 			lastAlive[i] = current;
