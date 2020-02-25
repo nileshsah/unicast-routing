@@ -35,7 +35,7 @@ int main(int argc, char** argv) {
 	int i;
 	for(i = 0; i < 256; i++) {
 		gettimeofday(&globalLastHeartbeat[i], 0);
-		globalLastHeartbeat[i].tv_sec -= 50; // To await broadcast message from neighbors
+		globalLastHeartbeat[i].tv_sec -= 100; // To await broadcast message from neighbors
 		
 		char tempaddr[100];
 		sprintf(tempaddr, "10.1.1.%d", i);
@@ -54,8 +54,8 @@ int main(int argc, char** argv) {
     FILE *fileToRead = fopen(argv[2], "r");
     while (fgets(buffer, sizeof(buffer), fileToRead) != NULL) {
         sscanf(buffer, "%d %d", &nodeId, &costValue);
-        costTable[globalMyID][nodeId] = costValue;
-        costTable[nodeId][globalMyID] = costValue;
+        costTable[globalMyID][nodeId] = -costValue;
+        costTable[nodeId][globalMyID] = -costValue;
     }
     fclose(fileToRead);
     
@@ -78,6 +78,8 @@ int main(int argc, char** argv) {
 		close(globalSocketUDP);
 		exit(1);
 	}
+
+	sleep(5);
 		
 	//start threads... feel free to add your own, and to remove the provided ones.
 	pthread_t announcerThread, nodeLivelinessThread;

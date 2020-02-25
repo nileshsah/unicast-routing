@@ -54,14 +54,16 @@ void init() {
 		isNeighbor[i] = 0;
 		nextHop[i] = -1;
 	}
-	writeToFile("");
+	
+	FILE *fp = fopen(logFileName, "a");
+	fclose(fp);
 }
 
 // Logging helper functions
 
 void writeToFile(char *buffer) {
     FILE *fp = fopen(logFileName, "a");
-    fwrite(buffer, sizeof(char), sizeof(buffer), fp);
+    fwrite(buffer, sizeof(char), strlen(buffer), fp);
     fclose(fp);
 }
 
@@ -83,6 +85,8 @@ void logReceiveRequest(char *message) {
 	char buffer[1000];
     memset(buffer, '\0', sizeof buffer);
     sprintf(buffer, "receive packet message %s\n", message);
+	fprintf(stderr, "%s\n", buffer);
+
     writeToFile(buffer);
 }
 
@@ -121,6 +125,7 @@ int isAlive(int nodeId) {
 	struct timeval currentTime;
 	gettimeofday(&currentTime, 0);
 	long elapsedHeartbeatTime = currentTime.tv_sec - globalLastHeartbeat[nodeId].tv_sec;
+	//fprintf(stderr, "%d checked %d = %ld sec\n", globalMyID, nodeId, elapsedHeartbeatTime);
 	return (elapsedHeartbeatTime < BROADCAST_INTERVAL_IN_SEC + 1);
 }
 
@@ -128,7 +133,7 @@ void calculateNextHop(int parent[]) {
 	int i;
 	for (i = 0; i < MAX_NODE; i++) {
 		if (i == globalMyID) continue;
-		int current = parent[i], last = -1;
+		int current = parent[i], last = i;
 		while (current != -1) {
 			if (current == globalMyID) {
 				nextHop[i] = last;
@@ -248,6 +253,7 @@ void* nodeLivelinessCron(void* unusedParam) {
 					isNeighbor[i] = 0;
 					updateEdgeCost(globalMyID, i, -abs(currentCost), lamportClock);
 				} else {
+					fprintf(stderr, "%d has found %d alive with cost %d\n", globalMyID, i, currentCost);
 					isNeighbor[i] = 1;
 					updateEdgeCost(globalMyID, i, abs(currentCost), lamportClock);					
 				}
@@ -266,16 +272,20 @@ void parseManagerCostCommand(char *buffer, short int *nodeId, int *costValue) {
 	buffer += sizeof(short int);
     memcpy(costValue, buffer, sizeof(int));
 	*costValue = ntohl(*costValue);
+
+	fprintf(stderr, "%d: COST nodeId %d %d\n", globalMyID, *nodeId, *costValue);
 }
 
 // Format: “send”<4 ASCII bytes>destID<net order 2 bytes>message<some ASCII message (shorter than 100 bytes)>
-void parseManagerSendCommand(char *buffer, short *nodeId, char *message) {
+void parseManagerSendCommand(char *buffer, short *nodeId, char *message, int bufferLen) {
     buffer = buffer + 4;
     memcpy(nodeId, buffer, sizeof(short));
     *nodeId = ntohs(*nodeId);
 	buffer += sizeof(short);
-	int messageLen = strlen(buffer) - 4 - sizeof(short);
+	int messageLen = bufferLen - 4 - sizeof(short);
     memcpy(message, buffer, messageLen);
+
+	fprintf(stderr, "%d: SEND nodeId %d %s\n", globalMyID, *nodeId, message);
 }
 
 int parseHeartbeatMessage(char *buffer) {
@@ -302,6 +312,8 @@ void parseLspPacketMessage(char *buffer, short *srcId, short *destId, int *cost,
 	buffer += sizeof(int);
 	memcpy(nonce, buffer, sizeof(int));
     *nonce = ntohl(*nonce);
+
+	fprintf(stderr, "%d: LSPP src:%d dest:%d cost:%d %d\n", globalMyID, *srcId, *destId, *cost, *nonce);
 }
 
 void listenForNeighbors() {
@@ -320,6 +332,7 @@ void listenForNeighbors() {
 			exit(1);
 		}
 		recvBuf[bytesRecvd] = '\0';
+		//fprintf(stderr, "MyId: %d bytes %d %s\n", globalMyID, bytesRecvd, recvBuf);
 
 		// inet_ntop - convert IPv4 and IPv6 addresses from binary to text form
 		inet_ntop(AF_INET, &theirAddr.sin_addr, fromAddr, 100);
@@ -341,7 +354,10 @@ void listenForNeighbors() {
 			// Sends the requested message to the requested destination node
 			short nodeId, nextNodeId;
 			char message[100];
-			parseManagerSendCommand(recvBuf, &nodeId, message);
+			memset(message, '\0', sizeof message);
+
+			parseManagerSendCommand(recvBuf, &nodeId, message, bytesRecvd);
+
 			if (nodeId == globalMyID) {
 				logReceiveRequest(message);
 			} else {
@@ -350,7 +366,7 @@ void listenForNeighbors() {
 					logUnreachableSendRequest(nodeId);
 				} else {
 					sendto(globalSocketUDP, recvBuf, bytesRecvd, 0, 
-						(struct sockaddr*)&globalNodeAddrs[nodeId], sizeof(globalNodeAddrs[nodeId]));
+						(struct sockaddr*)&globalNodeAddrs[nextNodeId], sizeof(globalNodeAddrs[nextNodeId]));
 					if (strstr(fromAddr, "10.1.1.")) {
 						logForwardingRequest(nodeId, nextNodeId, message);			
 					} else {

@@ -11,8 +11,8 @@ import sys
 directory_results = "results/"
 manager_file = "./manager/manager_send"
 maketopology_file = "manager/make_topology.pl"
-network_name = "enp0s3" #Replace this with the name of the network you see with ifconfig command in the terminal
-program_name = "./vec_router" #Replace this with your program name
+network_name = "eth0" #Replace this with the name of the network you see with ifconfig command in the terminal
+program_name = "./ls_router" #Replace this with your program name
 
 def initialize_results():
 	if (os.path.exists(directory_results)):
