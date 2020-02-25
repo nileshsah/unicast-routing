@@ -21,3 +21,7 @@ void* announceToNeighbors(void* unusedParam);
 
 void listenForNeighbors();
 
+void buildRoutingTable();
+
+int isAlive(int);
+
