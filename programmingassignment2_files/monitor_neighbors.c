@@ -28,6 +28,14 @@ extern struct sockaddr_in globalNodeAddrs[MAX_NODE];
 // LSP data
 extern long costTable[MAX_NODE][MAX_NODE];
 
+
+void buildRoutingTable();
+int isAlive(int);
+void broadcastLinkStatePacket(short srcId, short destId, int cost);
+void hackyBroadcast(const char* buf, int length, int onlyNeighbors);
+void writeToFile(char *buffer);
+
+
 int lamportClock;
 int clockTable[MAX_NODE][MAX_NODE];
 int nextHop[MAX_NODE];
@@ -46,6 +54,7 @@ void init() {
 		isNeighbor[i] = 0;
 		nextHop[i] = -1;
 	}
+	writeToFile("");
 }
 
 // Logging helper functions
@@ -53,46 +62,34 @@ void init() {
 void writeToFile(char *buffer) {
     FILE *fp = fopen(logFileName, "a");
     fwrite(buffer, sizeof(char), sizeof(buffer), fp);
-	fwrite("\n", sizeof(char), 1, fp);
     fclose(fp);
 }
 
 void logSendRequest(int destId, int nodeId, char *message) {
     char buffer[1000];
     memset(buffer, '\0', sizeof buffer);
-    
-    int charCount = sprintf(buffer, "sending packet dest %d nexthop %d message ", destId, nodeId);
-    strncpy(buffer + charCount, message, strlen(message));
-    
+    sprintf(buffer, "sending packet dest %d nexthop %d message %s\n", destId, nodeId, message);
     writeToFile(buffer);
 }
 
 void logForwardingRequest(int destId, int nodeId, char *message) {
     char buffer[1000];
     memset(buffer, '\0', sizeof buffer);
-    
-    int charCount = sprintf(buffer, "forward packet dest %d nexthop %d message ", destId, nodeId);
-    strncpy(buffer + charCount, message, strlen(message));
-    
+    sprintf(buffer, "forward packet dest %d nexthop %d message %s\n", destId, nodeId, message); 
     writeToFile(buffer);
 }
 
 void logReceiveRequest(char *message) {
 	char buffer[1000];
     memset(buffer, '\0', sizeof buffer);
-    
-    int charCount = sprintf(buffer, "receive packet message ");
-    strncpy(buffer + charCount, message, strlen(message));
-    
+    sprintf(buffer, "receive packet message %s\n", message);
     writeToFile(buffer);
 }
 
 void logUnreachableSendRequest(int destId) {
 	char buffer[1000];
     memset(buffer, '\0', sizeof buffer);
-    
-    sprintf(buffer, "unreachable dest %d", destId);
-    
+    sprintf(buffer, "unreachable dest %d\n", destId);
     writeToFile(buffer);
 }
 
@@ -250,7 +247,7 @@ void* nodeLivelinessCron(void* unusedParam) {
 				if (current == 0) {
 					isNeighbor[i] = 0;
 					updateEdgeCost(globalMyID, i, -abs(currentCost), lamportClock);
-				} else if (currentCost != -INF) {
+				} else {
 					isNeighbor[i] = 1;
 					updateEdgeCost(globalMyID, i, abs(currentCost), lamportClock);					
 				}
