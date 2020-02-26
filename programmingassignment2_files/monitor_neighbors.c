@@ -29,21 +29,25 @@ extern struct sockaddr_in globalNodeAddrs[MAX_NODE];
 extern long costTable[MAX_NODE][MAX_NODE];
 
 
-void buildRoutingTable();
+void buildRoutingTable(int);
 int isAlive(int);
 int buildLinkStatePacket(char *sendBuf, short srcId, short destId, int cost, int clockVal);
 void hackyBroadcast(const char* buf, int length, int onlyNeighbors);
 void writeToFile(char *buffer);
+void *connectionHandler(void *threadId);
 
 
 int lamportClock;
+int lastTableBuildTime;
 int clockTable[MAX_NODE][MAX_NODE];
 int nextHop[MAX_NODE];
 int isNeighbor[MAX_NODE];
+int exists[MAX_NODE];
 
 void init() {
 	int i, j;
 	lamportClock = 1;
+    lastTableBuildTime = 0;
 	for (i = 0; i < MAX_NODE; i++) {
 		for (j = 0; j < MAX_NODE; j++) {
 			costTable[i][j] =  -1;
@@ -53,6 +57,7 @@ void init() {
 	for (i = 0; i < MAX_NODE; i++) {
 		isNeighbor[i] = 0;
 		nextHop[i] = -1;
+        exists[i] = 0;
 	}
 	
 	FILE *fp = fopen(logFileName, "a");
@@ -99,10 +104,11 @@ void logUnreachableSendRequest(int destId) {
 
 // --------------
 
-void updateClock(int clockVal) {
+int updateClock(int clockVal) {
 	if (lamportClock < clockVal) {
 		lamportClock = clockVal;
 	}
+    return lamportClock;
 }
 
 void updateEdgeCost(int srcId, int destId, int cost, int clockVal) {
@@ -115,11 +121,14 @@ void updateEdgeCost(int srcId, int destId, int cost, int clockVal) {
 	clockTable[srcId][destId] = clockVal;
 	clockTable[destId][srcId] = clockVal;
 
+    exists[srcId] = exists[destId] = 1;
+
 	if (lastCost != cost) {
-		buildRoutingTable();
+        int lamportClockVal = updateClock(lamportClock + 1);
 		char buffer[1000]; int length;
-		length = buildLinkStatePacket(buffer, srcId, destId, cost, -1);
+		length = buildLinkStatePacket(buffer, srcId, destId, cost, clockVal);
 		hackyBroadcast(buffer, length, 1);
+		buildRoutingTable(lamportClockVal);
 	}
 }
 
@@ -128,7 +137,7 @@ int isAlive(int nodeId) {
 	gettimeofday(&currentTime, 0);
 	long elapsedHeartbeatTime = currentTime.tv_sec - globalLastHeartbeat[nodeId].tv_sec;
 	//fprintf(stderr, "%d checked %d = %ld sec\n", globalMyID, nodeId, elapsedHeartbeatTime);
-	return (elapsedHeartbeatTime < BROADCAST_INTERVAL_IN_SEC);
+	return (elapsedHeartbeatTime < BROADCAST_TIMEOUT_IN_SEC);
 }
 
 void calculateNextHop(int parent[]) {
@@ -148,28 +157,34 @@ void calculateNextHop(int parent[]) {
 }
 
 // Single source shortest path using Bellman-Ford algorithm
-void buildRoutingTable() {
-	long distance[MAX_NODE];
-	int i, j, k, parent[MAX_NODE];
-	// Init the distance and parent arrays
-	for (i = 0; i < MAX_NODE; i++) {
-		distance[i] = INF;
-		parent[i] = -1;
-		nextHop[i] = -1;
-	}
-	distance[globalMyID] = 0;
+void buildRoutingTable(int lamportClockVal) {
+    if (lastTableBuildTime >= lamportClockVal) {
+        return;
+    }
+    lastTableBuildTime = lamportClockVal;
+    long distance[MAX_NODE];
+    int i, j, k, n = 0, x, y, parent[MAX_NODE], neighbors[MAX_NODE];
+    // Init the distance and parent arrays
+    for (i = 0; i < MAX_NODE; i++) {
+        distance[i] = INF;
+        parent[i] = -1;
+        nextHop[i] = -1;
+        if (exists[i]) neighbors[n++] = i;
+    }
+    distance[globalMyID] = 0;
 
-	for (k = 0; k < MAX_NODE; k++) {
-		for (i = 0; i < MAX_NODE; i++) for (j = 0; j < MAX_NODE; j++) {
-			if (i == j || costTable[i][j] < 0) continue;
-			long newCost = distance[i] + costTable[i][j];
-			if ((newCost < distance[j]) || (newCost == distance[j] && parent[j] > i)) {
-				distance[j] = newCost;
-				parent[j] = i;
-			}
-		}
-	}
-	calculateNextHop(parent);
+    for (k = 0; k < n; k++) {
+        for (x = 0; x < n; x++) for (y = 0; y < n; y++) {
+            i = neighbors[x]; j = neighbors[y];
+            if (i == j || costTable[i][j] < 0) continue;
+            long newCost = distance[i] + costTable[i][j];
+            if ((newCost < distance[j]) || (newCost == distance[j] && parent[j] > i)) {
+                distance[j] = newCost;
+                parent[j] = i;
+            }
+        }
+    }
+    calculateNextHop(parent);
 }
 
 // lspp<2 bytes srcNode><2 bytes destNode><4 bytes cost><4 bytes nonce>
@@ -240,18 +255,18 @@ void processLspPacket(short srcId, short destId, int cost, int nonce) {
 // can't receive broadcast packets unless it's bound to INADDR_ANY,
 // which we can't do in this assignment.
 void hackyBroadcast(const char* buf, int length, int onlyNeighbors) {
-	int i;
-	for (i = 0; i < 256; i++) {
-		if (i == globalMyID) continue; // (although with a real broadcast you would also get the packet yourself)
-		if (onlyNeighbors && !isNeighbor[i]) continue;
-		sendto(globalSocketUDP, buf, length, 0, (struct sockaddr*)&globalNodeAddrs[i], sizeof(globalNodeAddrs[i]));
-	}
+    int i;
+    for (i = 0; i < 256; i++) {
+        if (i == globalMyID) continue; // (although with a real broadcast you would also get the packet yourself)
+        if (onlyNeighbors && !isNeighbor[i]) continue;
+        sendto(globalSocketUDP, buf, length, 0, (struct sockaddr*)&globalNodeAddrs[i], sizeof(globalNodeAddrs[i]));
+    }
 }
 
 void* announceToNeighbors(void* unusedParam) {
 	struct timespec sleepFor;
 	sleepFor.tv_sec = 0;
-	sleepFor.tv_nsec = 500 * 1000 * 1000; // 500 ms
+	sleepFor.tv_nsec = 400 * 1000 * 1000; // 500 ms
 	while (1) {
 		updateClock(lamportClock + 1);
 		int clockVal = htonl(lamportClock);
@@ -264,14 +279,14 @@ void* announceToNeighbors(void* unusedParam) {
 }
 
 void shareTopologyWithNode(int nodeId) {
-	int i, j;
-	for (i = 0; i < MAX_NODE; i++) for (j = i + 1; j < MAX_NODE; j++) {
-		if (costTable[i][j] < 0) continue;
-		char lspBuf[1000]; int length;
-		length = buildLinkStatePacket(lspBuf, i, j, costTable[i][j], clockTable[i][j]);
-		sendto(globalSocketUDP, lspBuf, length, 0, 
-					(struct sockaddr*)&globalNodeAddrs[nodeId], sizeof(globalNodeAddrs[nodeId]));
-	}
+    int i, j;
+    for (i = 0; i < MAX_NODE; i++) for (j = i + 1; j < MAX_NODE; j++) {
+        if (costTable[i][j] < 0) continue;
+        char lspBuf[1000]; int length;
+        length = buildLinkStatePacket(lspBuf, i, j, costTable[i][j], clockTable[i][j]);
+        sendto(globalSocketUDP, lspBuf, length, 0, 
+                    (struct sockaddr*)&globalNodeAddrs[nodeId], sizeof(globalNodeAddrs[nodeId]));
+    }
 }
 
 void* nodeLivelinessCron(void* unusedParam) {
@@ -359,86 +374,103 @@ void parseLspPacketMessage(char *buffer, short *srcId, short *destId, int *cost,
 }
 
 void listenForNeighbors() {
-	char fromAddr[100];
-	struct sockaddr_in theirAddr;
-	socklen_t theirAddrLen;
-	char recvBuf[1005];
-
-	int bytesRecvd;
-	while (1) {
-		theirAddrLen = sizeof(theirAddr);
-		// ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags, struct sockaddr *src_addr, socklen_t *addrlen);
-		bytesRecvd = recvfrom(globalSocketUDP, recvBuf, 1000 , 0, (struct sockaddr*)&theirAddr, &theirAddrLen);
-		if (bytesRecvd == -1) {
-			perror("connectivity listener: recvfrom failed");
-			exit(1);
-		}
-		recvBuf[bytesRecvd] = '\0';
-		//fprintf(stderr, "MyId: %d bytes %d %s\n", globalMyID, bytesRecvd, recvBuf);
-
-		// inet_ntop - convert IPv4 and IPv6 addresses from binary to text form
-		inet_ntop(AF_INET, &theirAddr.sin_addr, fromAddr, 100);
-		
-		short int heardFrom = -1;
-		if (strstr(fromAddr, "10.1.1.")) {
-			heardFrom = atoi(strchr(strchr(strchr(fromAddr,'.')+1,'.')+1,'.')+1);
-			
-			//TODO: this node can consider heardFrom to be directly connected to it; do any such logic now.
-			isNeighbor[heardFrom] = 1;
-
-			//record that we heard from heardFrom just now.
-			gettimeofday(&globalLastHeartbeat[heardFrom], 0);
-		}
-		
-		//Is it a packet from the manager? (see mp2 specification for more details)
-		//send format: 'send'<4 ASCII bytes>, destID<net order 2 byte signed>, <some ASCII message>
-		if (!strncmp(recvBuf, "send", 4)) {
-			// Sends the requested message to the requested destination node
-			short nodeId, nextNodeId;
-			char message[100];
-			memset(message, '\0', sizeof message);
-
-			parseManagerSendCommand(recvBuf, &nodeId, message, bytesRecvd);
-
-			if (nodeId == globalMyID) {
-				logReceiveRequest(message);
-			} else {
-				nextNodeId = nextHop[nodeId];
-				if (nextNodeId== -1) {
-					logUnreachableSendRequest(nodeId);
-				} else {
-					sendto(globalSocketUDP, recvBuf, bytesRecvd, 0, 
-						(struct sockaddr*)&globalNodeAddrs[nextNodeId], sizeof(globalNodeAddrs[nextNodeId]));
-					if (strstr(fromAddr, "10.1.1.")) {
-						logForwardingRequest(nodeId, nextNodeId, message);			
-					} else {
-						logSendRequest(nodeId, nextNodeId, message);			
-					}
-				}
-			}
-		} else if (!strncmp(recvBuf, "cost", 4)) {
-			// 'cost'<4 ASCII bytes>, destID<net order 2 byte signed> newCost<net order 4 byte signed>
-			// Records the cost change (remember, the link might currently be down! in that case,
-			// this is the new cost you should treat it as having once it comes back up.)
-			short int nodeId; int costValue;
-			parseManagerCostCommand(recvBuf, &nodeId, &costValue);
-			updateClock(lamportClock + 1);
-			updateEdgeCost(globalMyID, nodeId, costValue, lamportClock);
-		} else if (!strncmp(recvBuf, "beat", 4)) {
-			int clockVal = parseHeartbeatMessage(recvBuf);
-			updateClock(clockVal + 1);
-		} else if (!strncmp(recvBuf, "lspp", 4)) {
-			short srcId, destId;
-			int cost, nonce;
-			parseLspPacketMessage(recvBuf, &srcId, &destId, &cost, &nonce);
-			processLspPacket(srcId, destId, cost, nonce);
-		}
-		
-		//TODO now check for the various types of packets you use in your own protocol
-		//else if(!strncmp(recvBuf, "your other message types", ))
-		// ... 
-	}
-	//(should never reach here)
-	close(globalSocketUDP);
+    long i, returnVal;
+    pthread_t sniffer_thread[NUM_CLIENT_THREADS + 1];
+    for (i = 0; i < NUM_CLIENT_THREADS; i++) {
+        returnVal = pthread_create(&sniffer_thread[i] , NULL ,  connectionHandler , (void*) i);
+        if (returnVal < 0) {
+            perror("could not create thread");
+            return;
+        }
+    }
+    pthread_exit(NULL);
+    return;
 }
 
+void *connectionHandler(void *threadId) {
+    char fromAddr[100];
+    struct sockaddr_in theirAddr;
+    socklen_t theirAddrLen;
+    char recvBuf[1005];
+
+    int bytesRecvd;
+    while (1) {
+        theirAddrLen = sizeof(theirAddr);
+        // ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags, struct sockaddr *src_addr, socklen_t *addrlen);
+        bytesRecvd = recvfrom(globalSocketUDP, recvBuf, 1000 , 0, (struct sockaddr*)&theirAddr, &theirAddrLen);
+        if (bytesRecvd == -1) {
+            perror("connectivity listener: recvfrom failed");
+            exit(1);
+        }
+        recvBuf[bytesRecvd] = '\0';
+        //fprintf(stderr, "MyId: %d bytes %d %s\n", globalMyID, bytesRecvd, recvBuf);
+
+        // inet_ntop - convert IPv4 and IPv6 addresses from binary to text form
+        inet_ntop(AF_INET, &theirAddr.sin_addr, fromAddr, 100);
+        
+        short int heardFrom = -1;
+        if (strstr(fromAddr, "10.1.1.")) {
+            heardFrom = atoi(strchr(strchr(strchr(fromAddr,'.')+1,'.')+1,'.')+1);
+            
+            //TODO: this node can consider heardFrom to be directly connected to it; do any such logic now.
+            isNeighbor[heardFrom] = 1;
+
+            //record that we heard from heardFrom just now.
+            gettimeofday(&globalLastHeartbeat[heardFrom], 0);
+        }
+        
+        //Is it a packet from the manager? (see mp2 specification for more details)
+        //send format: 'send'<4 ASCII bytes>, destID<net order 2 byte signed>, <some ASCII message>
+        if (!strncmp(recvBuf, "send", 4)) {
+            // Sends the requested message to the requested destination node
+            //pthread_mutex_lock(&lock);
+
+            short nodeId, nextNodeId;
+            char message[100];
+            memset(message, '\0', sizeof message);
+
+            parseManagerSendCommand(recvBuf, &nodeId, message, bytesRecvd);
+
+            if (nodeId == globalMyID) {
+                logReceiveRequest(message);
+            } else {
+                nextNodeId = nextHop[nodeId];
+                if (nextNodeId== -1) {
+                    logUnreachableSendRequest(nodeId);
+                } else {
+                    sendto(globalSocketUDP, recvBuf, bytesRecvd, 0, 
+                        (struct sockaddr*)&globalNodeAddrs[nextNodeId], sizeof(globalNodeAddrs[nextNodeId]));
+                    if (heardFrom != -1) {
+                        logForwardingRequest(nodeId, nextNodeId, message);			
+                    } else {
+                        logSendRequest(nodeId, nextNodeId, message);			
+                    }
+                }
+            }
+            
+            //pthread_mutex_unlock(&lock);
+        } else if (!strncmp(recvBuf, "cost", 4)) {
+            // 'cost'<4 ASCII bytes>, destID<net order 2 byte signed> newCost<net order 4 byte signed>
+            // Records the cost change (remember, the link might currently be down! in that case,
+            // this is the new cost you should treat it as having once it comes back up.)
+            short int nodeId; int costValue;
+            parseManagerCostCommand(recvBuf, &nodeId, &costValue);
+            updateClock(lamportClock + 1);
+            updateEdgeCost(globalMyID, nodeId, costValue, lamportClock);
+        } else if (!strncmp(recvBuf, "beat", 4)) {
+            int clockVal = parseHeartbeatMessage(recvBuf);
+            updateClock(clockVal + 1);
+        } else if (!strncmp(recvBuf, "lspp", 4)) {
+            short srcId, destId;
+            int cost, nonce;
+            parseLspPacketMessage(recvBuf, &srcId, &destId, &cost, &nonce);
+            processLspPacket(srcId, destId, cost, nonce);
+        }
+        
+        //TODO now check for the various types of packets you use in your own protocol
+        //else if(!strncmp(recvBuf, "your other message types", ))
+        // ... 
+    }
+    //(should never reach here)
+    close(globalSocketUDP);
+}

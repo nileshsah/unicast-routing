@@ -78,8 +78,6 @@ int main(int argc, char** argv) {
 		close(globalSocketUDP);
 		exit(1);
 	}
-
-	sleep(3);
 		
 	//start threads... feel free to add your own, and to remove the provided ones.
 	pthread_t announcerThread, nodeLivelinessThread;

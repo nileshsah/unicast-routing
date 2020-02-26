@@ -13,7 +13,8 @@
 
 #define MAX_NODE 256
 #define INF 2147483647
-#define BROADCAST_INTERVAL_IN_SEC 2
+#define BROADCAST_TIMEOUT_IN_SEC 2
+#define NUM_CLIENT_THREADS 20
 
 void* announceToNeighbors(void* unusedParam);
 void* nodeLivelinessCron(void* unusedParam);
