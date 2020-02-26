@@ -45,23 +45,23 @@ int isNeighbor[MAX_NODE];
 int exists[MAX_NODE];
 
 void init() {
-	int i, j;
-	lamportClock = 1;
+    int i, j;
+    lamportClock = 1;
     lastTableBuildTime = 0;
-	for (i = 0; i < MAX_NODE; i++) {
-		for (j = 0; j < MAX_NODE; j++) {
-			costTable[i][j] =  -1;
-			clockTable[i][j] = 0;
-		}
-	}
-	for (i = 0; i < MAX_NODE; i++) {
-		isNeighbor[i] = 0;
-		nextHop[i] = -1;
+    for (i = 0; i < MAX_NODE; i++) {
+        for (j = 0; j < MAX_NODE; j++) {
+            costTable[i][j] =  -1;
+            clockTable[i][j] = 0;
+        }
+    }
+    for (i = 0; i < MAX_NODE; i++) {
+        isNeighbor[i] = 0;
+        nextHop[i] = -1;
         exists[i] = 0;
-	}
-	
-	FILE *fp = fopen(logFileName, "a");
-	fclose(fp);
+    }
+    
+    FILE *fp = fopen(logFileName, "a");
+    fclose(fp);
 }
 
 // Logging helper functions
@@ -87,16 +87,16 @@ void logForwardingRequest(int destId, int nodeId, char *message) {
 }
 
 void logReceiveRequest(char *message) {
-	char buffer[1000];
+    char buffer[1000];
     memset(buffer, '\0', sizeof buffer);
     sprintf(buffer, "receive packet message %s\n", message);
-	fprintf(stderr, "%s\n", buffer);
+    fprintf(stderr, "%s\n", buffer);
 
     writeToFile(buffer);
 }
 
 void logUnreachableSendRequest(int destId) {
-	char buffer[1000];
+    char buffer[1000];
     memset(buffer, '\0', sizeof buffer);
     sprintf(buffer, "unreachable dest %d\n", destId);
     writeToFile(buffer);
@@ -105,55 +105,55 @@ void logUnreachableSendRequest(int destId) {
 // --------------
 
 int updateClock(int clockVal) {
-	if (lamportClock < clockVal) {
-		lamportClock = clockVal;
-	}
+    if (lamportClock < clockVal) {
+        lamportClock = clockVal;
+    }
     return lamportClock;
 }
 
 void updateEdgeCost(int srcId, int destId, int cost, int clockVal) {
-	long lastCost;
-	lastCost = costTable[srcId][destId];
-	
-	costTable[srcId][destId] = cost;
-	costTable[destId][srcId] = cost;
+    long lastCost;
+    lastCost = costTable[srcId][destId];
+    
+    costTable[srcId][destId] = cost;
+    costTable[destId][srcId] = cost;
 
-	clockTable[srcId][destId] = clockVal;
-	clockTable[destId][srcId] = clockVal;
+    clockTable[srcId][destId] = clockVal;
+    clockTable[destId][srcId] = clockVal;
 
     exists[srcId] = exists[destId] = 1;
 
-	if (lastCost != cost) {
+    if (lastCost != cost) {
         int lamportClockVal = updateClock(lamportClock + 1);
-		char buffer[1000]; int length;
-		length = buildLinkStatePacket(buffer, srcId, destId, cost, clockVal);
-		hackyBroadcast(buffer, length, 1);
-		buildRoutingTable(lamportClockVal);
-	}
+        char buffer[1000]; int length;
+        length = buildLinkStatePacket(buffer, srcId, destId, cost, clockVal);
+        hackyBroadcast(buffer, length, 1);
+        buildRoutingTable(lamportClockVal);
+    }
 }
 
 int isAlive(int nodeId) {
-	struct timeval currentTime;
-	gettimeofday(&currentTime, 0);
-	long elapsedHeartbeatTime = currentTime.tv_sec - globalLastHeartbeat[nodeId].tv_sec;
-	//fprintf(stderr, "%d checked %d = %ld sec\n", globalMyID, nodeId, elapsedHeartbeatTime);
-	return (elapsedHeartbeatTime < BROADCAST_TIMEOUT_IN_SEC);
+    struct timeval currentTime;
+    gettimeofday(&currentTime, 0);
+    long elapsedHeartbeatTime = currentTime.tv_sec - globalLastHeartbeat[nodeId].tv_sec;
+    //fprintf(stderr, "%d checked %d = %ld sec\n", globalMyID, nodeId, elapsedHeartbeatTime);
+    return (elapsedHeartbeatTime < BROADCAST_TIMEOUT_IN_SEC);
 }
 
 void calculateNextHop(int parent[]) {
-	int i;
-	for (i = 0; i < MAX_NODE; i++) {
-		if (i == globalMyID) continue;
-		int current = parent[i], last = i;
-		while (current != -1) {
-			if (current == globalMyID) {
-				nextHop[i] = last;
-				break;
-			}
-			last = current;
-			current = parent[current];
-		}
-	}
+    int i;
+    for (i = 0; i < MAX_NODE; i++) {
+        if (i == globalMyID) continue;
+        int current = parent[i], last = i;
+        while (current != -1) {
+            if (current == globalMyID) {
+                nextHop[i] = last;
+                break;
+            }
+            last = current;
+            current = parent[current];
+        }
+    }
 }
 
 // Single source shortest path using Bellman-Ford algorithm
@@ -189,65 +189,38 @@ void buildRoutingTable(int lamportClockVal) {
 
 // lspp<2 bytes srcNode><2 bytes destNode><4 bytes cost><4 bytes nonce>
 int buildLinkStatePacket(char *sendBuf, short srcId, short destId, int cost, int clockVal) {
-	short noSrcId = htons(srcId), noDestId = htons(destId);
-	int noCost = htonl(cost);
-	int packetLength = 4 + sizeof(short) + sizeof(short) + sizeof(int) + sizeof(int);
+    short noSrcId = htons(srcId), noDestId = htons(destId);
+    int noCost = htonl(cost);
+    int packetLength = 4 + sizeof(short) + sizeof(short) + sizeof(int) + sizeof(int);
 
-	// Build LSP packet	
-	char *writePtr = sendBuf;
-	strcpy(writePtr, "lspp");
-	
-	writePtr += 4;
-	memcpy(writePtr, &noSrcId, sizeof(short int));
-	
-	writePtr += sizeof(short);
-	memcpy(writePtr, &noDestId, sizeof(short int));
+    // Build LSP packet	
+    char *writePtr = sendBuf;
+    strcpy(writePtr, "lspp");
+    
+    writePtr += 4;
+    memcpy(writePtr, &noSrcId, sizeof(short int));
+    
+    writePtr += sizeof(short);
+    memcpy(writePtr, &noDestId, sizeof(short int));
 
-	writePtr += sizeof(short);
-	memcpy(writePtr, &noCost, sizeof(int));
+    writePtr += sizeof(short);
+    memcpy(writePtr, &noCost, sizeof(int));
 
 
-	writePtr += sizeof(int);
-	clockVal = (clockVal == -1 ? htonl(lamportClock) : htonl(clockVal));
-	memcpy(writePtr, &clockVal, sizeof(int));
+    writePtr += sizeof(int);
+    clockVal = (clockVal == -1 ? htonl(lamportClock) : htonl(clockVal));
+    memcpy(writePtr, &clockVal, sizeof(int));
 
-	return packetLength;
-}
-
-void broadcastLinkStatePacket(short srcId, short destId, int cost) {
-	short noSrcId = htons(srcId), noDestId = htons(destId);
-	int noCost = htonl(cost), clockVal = htonl(lamportClock);
-	int packetLength = 4 + sizeof(short) + sizeof(short) + sizeof(int) + sizeof(int);
-
-	// Build LSP packet
-	char sendBuf[packetLength];
-	
-	char *writePtr = sendBuf;
-	strcpy(writePtr, "lspp");
-	
-	writePtr += 4;
-	memcpy(writePtr, &noSrcId, sizeof(short int));
-	
-	writePtr += sizeof(short);
-	memcpy(writePtr, &noDestId, sizeof(short int));
-
-	writePtr += sizeof(short);
-	memcpy(writePtr, &noCost, sizeof(int));
-
-	writePtr += sizeof(int);
-	memcpy(writePtr, &clockVal, sizeof(int));
-
-	// Broadcast it to all neighbors!
-	hackyBroadcast(sendBuf, packetLength, 1);
+    return packetLength;
 }
 
 void processLspPacket(short srcId, short destId, int cost, int nonce) {
-	int currentClock = clockTable[srcId][destId];
-	if (currentClock >= nonce) {
-		return;
-	}
-	updateClock(nonce);
-	updateEdgeCost(srcId, destId, cost, nonce);
+    int currentClock = clockTable[srcId][destId];
+    if (currentClock >= nonce) {
+        return;
+    }
+    updateClock(nonce);
+    updateEdgeCost(srcId, destId, cost, nonce);
 }
 
 
@@ -264,18 +237,18 @@ void hackyBroadcast(const char* buf, int length, int onlyNeighbors) {
 }
 
 void* announceToNeighbors(void* unusedParam) {
-	struct timespec sleepFor;
-	sleepFor.tv_sec = 0;
-	sleepFor.tv_nsec = 400 * 1000 * 1000; // 500 ms
-	while (1) {
-		updateClock(lamportClock + 1);
-		int clockVal = htonl(lamportClock);
-		char beatBuf[4+sizeof(int)];
-		strcpy(beatBuf, "beat");
-		memcpy(beatBuf+4, &clockVal, sizeof(int));
-		hackyBroadcast(beatBuf, 4+sizeof(int), 0);
-		nanosleep(&sleepFor, 0);
-	}
+    struct timespec sleepFor;
+    sleepFor.tv_sec = 0;
+    sleepFor.tv_nsec = 400 * 1000 * 1000; // 400 ms
+    while (1) {
+        updateClock(lamportClock + 1);
+        int clockVal = htonl(lamportClock);
+        char beatBuf[4+sizeof(int)];
+        strcpy(beatBuf, "beat");
+        memcpy(beatBuf+4, &clockVal, sizeof(int));
+        hackyBroadcast(beatBuf, 4+sizeof(int), 0);
+        nanosleep(&sleepFor, 0);
+    }
 }
 
 void shareTopologyWithNode(int nodeId) {
@@ -290,47 +263,47 @@ void shareTopologyWithNode(int nodeId) {
 }
 
 void* nodeLivelinessCron(void* unusedParam) {
-	struct timespec sleepFor;
-	sleepFor.tv_sec = 0;
-	sleepFor.tv_nsec = 500 * 1000 * 1000; // 500 ms
-	
-	int i;
-	int lastAlive[MAX_NODE];
-	memset(lastAlive, 0, sizeof lastAlive);
+    struct timespec sleepFor;
+    sleepFor.tv_sec = 0;
+    sleepFor.tv_nsec = 500 * 1000 * 1000; // 500 ms
+    
+    int i;
+    int lastAlive[MAX_NODE];
+    memset(lastAlive, 0, sizeof lastAlive);
 
-	while (1) {
-		for (i = 0; i < MAX_NODE; i++) {
-			int current = isAlive(i);
-			if (current != lastAlive[i]) {
-				int currentCost = costTable[globalMyID][i];
-				updateClock(lamportClock + 1);
-				if (current == 0) {
-					fprintf(stderr, "%d has found %d dead with cost %d\n", globalMyID, i, currentCost);
-					isNeighbor[i] = 0;
-					updateEdgeCost(globalMyID, i, -abs(currentCost), lamportClock);
-				} else {
-					fprintf(stderr, "%d has found %d alive with cost %d\n", globalMyID, i, currentCost);
-					isNeighbor[i] = 1;
-					updateEdgeCost(globalMyID, i, abs(currentCost), lamportClock);
-					shareTopologyWithNode(i);					
-				}
-			}
-			lastAlive[i] = current;
-		}
-		nanosleep(&sleepFor, 0);
-	}
+    while (1) {
+        for (i = 0; i < MAX_NODE; i++) {
+            int current = isAlive(i);
+            if (current != lastAlive[i]) {
+                int currentCost = costTable[globalMyID][i];
+                updateClock(lamportClock + 1);
+                if (current == 0) {
+                    fprintf(stderr, "%d has found %d dead with cost %d\n", globalMyID, i, currentCost);
+                    isNeighbor[i] = 0;
+                    updateEdgeCost(globalMyID, i, -abs(currentCost), lamportClock);
+                } else {
+                    fprintf(stderr, "%d has found %d alive with cost %d\n", globalMyID, i, currentCost);
+                    isNeighbor[i] = 1;
+                    updateEdgeCost(globalMyID, i, abs(currentCost), lamportClock);
+                    shareTopologyWithNode(i);					
+                }
+            }
+            lastAlive[i] = current;
+        }
+        nanosleep(&sleepFor, 0);
+    }
 }
 
 // Format: “cost”<4 ASCII bytes>destID<net order 2 bytes>newCost<net order 4 bytes>
 void parseManagerCostCommand(char *buffer, short int *nodeId, int *costValue) {
     buffer = buffer + 4;
     memcpy(nodeId, buffer, sizeof(short int));
-	*nodeId = ntohs(*nodeId);
-	buffer += sizeof(short int);
+    *nodeId = ntohs(*nodeId);
+    buffer += sizeof(short int);
     memcpy(costValue, buffer, sizeof(int));
-	*costValue = ntohl(*costValue);
+    *costValue = ntohl(*costValue);
 
-	fprintf(stderr, "%d: COST nodeId %d %d\n", globalMyID, *nodeId, *costValue);
+    fprintf(stderr, "%d: COST nodeId %d %d\n", globalMyID, *nodeId, *costValue);
 }
 
 // Format: “send”<4 ASCII bytes>destID<net order 2 bytes>message<some ASCII message (shorter than 100 bytes)>
@@ -338,39 +311,39 @@ void parseManagerSendCommand(char *buffer, short *nodeId, char *message, int buf
     buffer = buffer + 4;
     memcpy(nodeId, buffer, sizeof(short));
     *nodeId = ntohs(*nodeId);
-	buffer += sizeof(short);
-	int messageLen = bufferLen - 4 - sizeof(short);
+    buffer += sizeof(short);
+    int messageLen = bufferLen - 4 - sizeof(short);
     memcpy(message, buffer, messageLen);
 
-	fprintf(stderr, "%d: SEND nodeId %d %s\n", globalMyID, *nodeId, message);
+    fprintf(stderr, "%d: SEND nodeId %d %s\n", globalMyID, *nodeId, message);
 }
 
 int parseHeartbeatMessage(char *buffer) {
-	int clockVal;
-	buffer = buffer + 4;
-	memcpy(&clockVal, buffer, sizeof(int));
+    int clockVal;
+    buffer = buffer + 4;
+    memcpy(&clockVal, buffer, sizeof(int));
     clockVal = ntohs(clockVal);
-	return clockVal;
+    return clockVal;
 }
 
 void parseLspPacketMessage(char *buffer, short *srcId, short *destId, int *cost, int *nonce) {
-	buffer = buffer + 4;
+    buffer = buffer + 4;
     memcpy(srcId, buffer, sizeof(short));
     *srcId = ntohs(*srcId);
 
-	buffer += sizeof(short);
-	memcpy(destId, buffer, sizeof(short));
+    buffer += sizeof(short);
+    memcpy(destId, buffer, sizeof(short));
     *destId = ntohs(*destId);
 
-	buffer += sizeof(short);
-	memcpy(cost, buffer, sizeof(int));
+    buffer += sizeof(short);
+    memcpy(cost, buffer, sizeof(int));
     *cost = ntohl(*cost);
 
-	buffer += sizeof(int);
-	memcpy(nonce, buffer, sizeof(int));
+    buffer += sizeof(int);
+    memcpy(nonce, buffer, sizeof(int));
     *nonce = ntohl(*nonce);
 
-	fprintf(stderr, "%d: LSPP src:%d dest:%d cost:%d %d\n", globalMyID, *srcId, *destId, *cost, *nonce);
+    fprintf(stderr, "%d: LSPP src:%d dest:%d cost:%d %d\n", globalMyID, *srcId, *destId, *cost, *nonce);
 }
 
 void listenForNeighbors() {
