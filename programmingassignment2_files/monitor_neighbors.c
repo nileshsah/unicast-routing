@@ -163,27 +163,30 @@ void buildRoutingTable(int lamportClockVal) {
     }
     lastTableBuildTime = lamportClockVal;
     long distance[MAX_NODE];
-    int i, j, k, n = 0, x, y, parent[MAX_NODE], neighbors[MAX_NODE];
+    int i, j, k, n = 0, x, y, firstNode[MAX_NODE], parent[MAX_NODE], neighbors[MAX_NODE];
     // Init the distance and parent arrays
     for (i = 0; i < MAX_NODE; i++) {
         distance[i] = INF;
         parent[i] = -1;
+        firstNode[i] = isNeighbor[i] ? i : MAX_NODE + 1;
         nextHop[i] = -1;
         if (exists[i]) neighbors[n++] = i;
     }
     distance[globalMyID] = 0;
+    firstNode[globalMyID] = -1;
 
     for (k = 0; k < n; k++) {
         for (x = 0; x < n; x++) for (y = 0; y < n; y++) {
             i = neighbors[x]; j = neighbors[y];
             if (i == j || costTable[i][j] < 0) continue;
             long newCost = distance[i] + costTable[i][j];
-            if ((newCost < distance[j]) || (newCost == distance[j] && parent[j] > i)) {
+            if ((newCost < distance[j]) || (newCost == distance[j] && firstNode[j] > firstNode[i])) {
                 distance[j] = newCost;
                 parent[j] = i;
+                if (firstNode[i] != -1) firstNode[j] = firstNode[i];
             }
         }
-    }
+    } 
     calculateNextHop(parent);
 }
 
@@ -350,7 +353,7 @@ void listenForNeighbors() {
     long i, returnVal;
     pthread_t sniffer_thread[NUM_CLIENT_THREADS + 1];
     for (i = 0; i < NUM_CLIENT_THREADS; i++) {
-        returnVal = pthread_create(&sniffer_thread[i] , NULL ,  connectionHandler , (void*) i);
+        returnVal = pthread_create(&sniffer_thread[i], NULL, connectionHandler, (void*) i);
         if (returnVal < 0) {
             perror("could not create thread");
             return;
@@ -396,8 +399,6 @@ void *connectionHandler(void *threadId) {
         //send format: 'send'<4 ASCII bytes>, destID<net order 2 byte signed>, <some ASCII message>
         if (!strncmp(recvBuf, "send", 4)) {
             // Sends the requested message to the requested destination node
-            //pthread_mutex_lock(&lock);
-
             short nodeId, nextNodeId;
             char message[100];
             memset(message, '\0', sizeof message);
@@ -419,9 +420,7 @@ void *connectionHandler(void *threadId) {
                         logSendRequest(nodeId, nextNodeId, message);			
                     }
                 }
-            }
-            
-            //pthread_mutex_unlock(&lock);
+            }            
         } else if (!strncmp(recvBuf, "cost", 4)) {
             // 'cost'<4 ASCII bytes>, destID<net order 2 byte signed> newCost<net order 4 byte signed>
             // Records the cost change (remember, the link might currently be down! in that case,
