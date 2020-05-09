@@ -15,10 +15,15 @@ For this project, a virtual network will be emulated using the iptables in Linux
 Your nodes will all run on the same machine. There will be a made-up topology applied to them in the following manner:
 
 • For each node, a virtual interface (eth0:1, eth0:2, etc) will be created and given an IP address.
+
 • A node with ID n gets address 10.1.1.n. IDs 0-255 inclusive are valid.
+
 • Your program will be given its ID on the command line, and when binding a socket to receive UDP packets, it should specify the corresponding IP address (rather than INADDR_ANY / NULL).
+
 • iptables rules will be applied to restrict which of these addresses can talk to which others. 10.1.1.30 and 10.1.1.0 can talk to each other if and only if they are neighbors in the made-up topology.
+
 • The topology’s connectivity is defined in a file that gets read by the script that creates the environment. The link costs are defined in files that tell nodes what their initial link costs to other nodes are, **if they are in fact neighbors**.
+
 • A node’s only way to determine who its neighbors are is to see who it can directly communicate with. Nodes do not get to see the aforementioned connectivity file.
 
 ### Manager:
@@ -71,8 +76,11 @@ The link costs that your node receives from the input file and the manager don�
 That concludes the description of how your nodes need to do I/O, interact with the manager program, and stay aware of the topology. Now, for what they should actually accomplish:
 
 • Using LS or DV/PV, maintain a correct forwarding table.
+
 • Forward any data packets that come along according to the forwarding table.
+
 • React to changes in the topology (changes in cost and/or connectivity).
+
 • Your nodes should converge within 5 seconds of the most recent change.
 
 **Partition:** the network might become partitioned, and your protocols should react correctly: when a node is asked to originate a packet towards a destination it does not know a path for, it should drop the packet, and rather than log a send event, log an unreachable event (see File Formats section).
@@ -80,6 +88,7 @@ That concludes the description of how your nodes need to do I/O, interact with t
 **Tie breaking**: we would like everyone to have consistent output even on complex topologies, so we ask you to follow specific tie-breaking rules.
 
 • DV/PV: when two equally good paths are available, your node should choose the one whose next-hop node ID is lower.
+
 • LS: When choosing which node to move to the finished set next, if there is a tie, choose the lowest node ID.
 
 ### File Formats
@@ -168,12 +177,19 @@ You can use the provided files as a starting point for the routing protocol impl
 The scoring will be determined by 8 tests, which are supposed to be progressively harder and stress different elements of your code.
 
 • Send a message to a non-neighbor node in a 3 node topology
+
 • Send a message (by shortest path, of course) to a non-neighbor in a certain small (<20 node) topology.
+
 • Send a message to a non-neighbor node in a certain large (>50 node) topology
+
 • Switch to a better path when one becomes available in a certain large topology
+
 • Correctly fall back to a worse path on a certain small topology
+
 • Correctly report a failed send in a certain small topology that gets partitioned
+
 • Get a packet through after a former partition is healed, large topology
+
 • Converge within the time limit after a major, rapid series of changes to the network (The time limit starts when the final change is made).
 
 ### Scoring Script:
